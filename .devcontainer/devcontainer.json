@@ -2,10 +2,7 @@
   "name": "Airway RNA-seq: FASTQ to featureCounts",
   "build": {
     "dockerfile": "../Dockerfile",
-    "context": "..",
-    "args": {
-      "AIRWAY_SPOTS": "200000"
-    }
+    "context": ".."
   },
   "remoteUser": "vscode",
   "postCreateCommand": "bash scripts/init_workspace.sh",
