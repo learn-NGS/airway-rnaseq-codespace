@@ -1,6 +1,5 @@
 FROM condaforge/miniforge3:latest
 
-ARG AIRWAY_SPOTS=200000
 ENV COURSE_ROOT=/opt/airway-rnaseq \
     THREADS=2 \
     PYTHONUNBUFFERED=1
@@ -12,7 +11,7 @@ RUN mamba env update -n base -f /tmp/environment.yml && \
 
 COPY docker/preload_course_data.sh /usr/local/bin/preload_course_data.sh
 RUN chmod +x /usr/local/bin/preload_course_data.sh && \
-    /usr/local/bin/preload_course_data.sh "${COURSE_ROOT}" "${AIRWAY_SPOTS}"
+    /usr/local/bin/preload_course_data.sh "${COURSE_ROOT}"
 
 RUN useradd -m -s /bin/bash vscode && \
     mkdir -p /workspace && \
