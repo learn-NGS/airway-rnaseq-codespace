@@ -1,0 +1,8 @@
+data/trimmed/
+data/raw_extra/
+results/
+logs/
+*.bam
+*.bai
+*.sam
+.DS_Store
