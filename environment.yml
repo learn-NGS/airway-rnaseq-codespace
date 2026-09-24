@@ -3,7 +3,7 @@ channels:
   - bioconda
 dependencies:
   - python=3.12
-  - fastqc
+  - fastqc=0.11.8
   - trim-galore
   - hisat2
   - samtools
