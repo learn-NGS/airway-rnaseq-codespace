@@ -1,23 +1,15 @@
 {
-  "name": "Airway RNA-seq: FASTQ to featureCounts",
+  "name": "Airway RNA-seq practical",
   "build": {
     "dockerfile": "../Dockerfile",
     "context": ".."
   },
   "remoteUser": "vscode",
-  "postCreateCommand": "bash scripts/init_workspace.sh",
   "forwardPorts": [8000],
   "portsAttributes": {
     "8000": {
-      "label": "RNA-seq output downloads",
+      "label": "RNA-seq results server",
       "onAutoForward": "notify"
-    }
-  },
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "ms-python.python"
-      ]
     }
   }
 }
