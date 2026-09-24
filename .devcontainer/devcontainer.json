@@ -4,12 +4,5 @@
     "dockerfile": "../Dockerfile",
     "context": ".."
   },
-  "remoteUser": "vscode",
-  "forwardPorts": [8000],
-  "portsAttributes": {
-    "8000": {
-      "label": "RNA-seq results server",
-      "onAutoForward": "notify"
-    }
-  }
+  "remoteUser": "vscode"
 }
