@@ -1,8 +1,15 @@
 # Airway RNA-seq practical: FASTQ → FastQC → Trim Galore → HISAT2 → featureCounts
 
-This repository is a **GitHub Codespaces-ready RNA-seq practical** designed for a machine with **2 vCPU and 8 GB RAM**.
+This repository is designed for a **GitHub Codespace with 2 vCPU and 8 GB RAM**.
 
-The practical takes students from:
+The practical uses **all 8 Airway samples** so students have:
+
+- **4 untreated samples**
+- **4 dexamethasone-treated samples**
+
+The final featureCounts matrix is therefore ready for a later **4 vs 4 differential gene expression analysis**.
+
+The analysis follows the workflow used in the supplied NGS report:
 
 ```text
 FASTQ
@@ -13,54 +20,99 @@ Trim Galore
   ↓
 Post-trim FastQC
   ↓
-HISAT2 alignment
+HISAT2
   ↓
-sorted + indexed BAM
+SAM → sorted BAM
   ↓
 featureCounts
   ↓
 gene count matrix
 ```
 
-All command-line tools are installed through **mamba/Bioconda** inside the Docker image. The Docker build also preloads the Airway teaching FASTQs, the human reference FASTA, the gene annotation GTF, and a pre-built HISAT2 GRCh38 index.
+The report uses FastQC for quality assessment, Trim Galore for adapter/low-quality removal with a Q30 threshold, HISAT2 for splice-aware alignment, and featureCounts for gene abundance estimation. The reference assembly is Homo sapiens GRCh38.p14.
+
+## Important design of this practical
+
+The Docker image does **only one job**:
+
+> install mamba and all required RNA-seq tools automatically.
+
+The Docker build does **not** download FASTQ files or the human reference genome. This keeps Codespace creation reliable and avoids the recovery-mode problem caused by doing large downloads during container creation.
+
+Students create the folders, download the data/reference files, and run each analysis command themselves.
+
+There are **no bash scripts to run for the analysis**. Each step below is one command that can be copied and pasted directly into the terminal.
 
 ---
 
-## 1. Workflow reproduced from the supplied NGS report
+# 1. Start the Codespace
 
-The supplied report describes a reference-guided transcriptome workflow using:
+On GitHub:
 
-- **FastQC** for raw-read quality assessment.
-- **Trim Galore** for adapter removal and filtering low-quality bases/reads.
-- **Q30** as the stated preprocessing quality threshold.
-- **HISAT2** as the splice-aware aligner, using default alignment parameters.
-- **featureCounts** for gene abundance estimation.
-- **Homo sapiens GRCh38.p14 (GCA_000001405.29)** as the reference assembly from Ensembl.
+```text
+Code → Codespaces → Create codespace on main
+```
 
-The practical stops at the featureCounts count matrix, as requested.
+The Docker image automatically installs:
 
-### Reproducibility note
+```text
+mamba
+FastQC
+Trim Galore
+HISAT2
+SAMtools
+featureCounts (Subread)
+SRA Toolkit
+SeqKit
+pigz
+Python
+```
 
-The report does not provide the literal Trim Galore or featureCounts shell commands. Therefore the missing command-line choices are made explicit here rather than presented as report-derived parameters:
+Check the installation with one command:
 
-- Trim Galore: paired-end mode with `--quality 30`.
-- HISAT2: default alignment behavior; only `-p 2` is added for the Codespace CPU limit.
-- featureCounts: paired-end fragment counting using `-p --countReadPairs`, exon features grouped by `gene_id`, and `-s 0` for the Airway teaching dataset.
+```bash
+mamba --version && fastqc --version && trim_galore --version | head -n 2 && hisat2 --version | head -n 1 && samtools --version | head -n 1 && featureCounts -v
+```
 
-FastQC is pinned to **v0.11.8**, the version named in the report.
+Check the available resources:
+
+```bash
+echo "CPU=$(nproc)" && free -h
+```
+
+For this practical, use **2 threads**.
 
 ---
 
-## 2. Airway RNA-seq dataset
+# 2. Create the directory structure
 
-The practical uses the well-known **Airway** dexamethasone RNA-seq experiment:
+Run this **single command**:
 
-- GEO: **GSE52778**
-- SRA study: **SRP033351**
+```bash
+mkdir -p ~/input ~/results/{fastqc,trim,fastqc_trimmed,reference,alignment,bam,featurecounts,logs}
+```
 
-The canonical 8-sample untreated/dexamethasone subset is:
+The resulting structure is:
 
-| Run | Cell line | Condition |
+```text
+~
+├── input/
+└── results/
+    ├── fastqc/
+    ├── trim/
+    ├── fastqc_trimmed/
+    ├── reference/
+    ├── alignment/
+    ├── bam/
+    ├── featurecounts/
+    └── logs/
+```
+
+---
+
+# 3. Airway samples used
+
+| Sample | Cell line | Condition |
 |---|---|---|
 | SRR1039508 | N61311 | untreated |
 | SRR1039509 | N61311 | dexamethasone |
@@ -71,365 +123,230 @@ The canonical 8-sample untreated/dexamethasone subset is:
 | SRR1039520 | N061011 | untreated |
 | SRR1039521 | N061011 | dexamethasone |
 
-For a practical running on only 2 vCPU, the Docker image preloads **four small paired-end teaching FASTQ subsets**:
+This gives four biological samples in each condition.
+
+For a 2-core teaching Codespace, the command below downloads the **first 200,000 paired-end spots from each SRA run** rather than the complete runs. The biological sample design remains 4 untreated vs 4 dexamethasone, but the read depth is intentionally reduced for classroom runtime.
+
+---
+
+# 4. Download all 8 paired-end FASTQ datasets
+
+Run this **single command**:
+
+```bash
+(cd ~/input && for run in SRR1039508 SRR1039509 SRR1039512 SRR1039513 SRR1039516 SRR1039517 SRR1039520 SRR1039521; do fastq-dump --split-files --gzip --skip-technical -N 1 -X 200000 "$run"; done)
+```
+
+Check that 16 FASTQ files were created:
+
+```bash
+ls -lh ~/input/*.fastq.gz
+```
+
+You should have R1 and R2 for each of the 8 samples.
+
+Optional FASTQ summary:
+
+```bash
+seqkit stats ~/input/*.fastq.gz
+```
+
+---
+
+# 5. Create the 4 vs 4 metadata file
+
+Run this **single command**:
+
+```bash
+printf "sample\tcell_line\tcondition\nSRR1039508\tN61311\tuntreated\nSRR1039509\tN61311\tdexamethasone\nSRR1039512\tN052611\tuntreated\nSRR1039513\tN052611\tdexamethasone\nSRR1039516\tN080611\tuntreated\nSRR1039517\tN080611\tdexamethasone\nSRR1039520\tN061011\tuntreated\nSRR1039521\tN061011\tdexamethasone\n" > ~/results/airway_metadata.tsv
+```
+
+View it:
+
+```bash
+column -t -s $'\t' ~/results/airway_metadata.tsv
+```
+
+---
+
+# 6. Download GRCh38.p14 reference, annotation and HISAT2 index
+
+The supplied report specifies the human **GRCh38.p14** assembly from Ensembl.
+
+This practical uses the Ensembl release 112 GRCh38 primary assembly and GTF, together with a pre-built HISAT2 GRCh38 index. A pre-built index is used because building the complete human HISAT2 index on a 2-core/8-GB teaching Codespace is unnecessarily slow and memory intensive.
+
+Run this **single command**:
+
+```bash
+curl -L https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz -o ~/results/reference/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz && curl -L https://ftp.ensembl.org/pub/release-112/gtf/homo_sapiens/Homo_sapiens.GRCh38.112.gtf.gz -o ~/results/reference/Homo_sapiens.GRCh38.112.gtf.gz && curl -L https://genome-idx.s3.amazonaws.com/hisat/grch38_genome.tar.gz -o ~/results/reference/grch38_genome.tar.gz && tar -xzf ~/results/reference/grch38_genome.tar.gz -C ~/results/reference && rm ~/results/reference/grch38_genome.tar.gz
+```
+
+Check the files:
+
+```bash
+ls -lh ~/results/reference
+```
+
+The HISAT2 index should be under:
 
 ```text
-SRR1039508
-SRR1039509
-SRR1039512
-SRR1039513
+~/results/reference/grch38/genome.*
 ```
 
-These files are from the public `csoneson/rnaseqworkflow_exampledata` teaching dataset. They contain reads from the same Airway runs and were subsetted to reads mapping within the first 10 Mb of chromosome 1, making them suitable for a classroom Codespace while still allowing alignment to the full GRCh38 reference.
+---
 
-The full sample metadata is in:
+# 7. Raw-read quality control — FastQC
+
+Run FastQC on **all 16 FASTQ files with one command**:
+
+```bash
+fastqc -t 2 ~/input/*.fastq.gz -o ~/results/fastqc
+```
+
+Output:
 
 ```text
-metadata/airway_samples.tsv
+~/results/fastqc/
 ```
+
+For each read file, FastQC generates an HTML report and a ZIP archive.
 
 ---
 
-## 3. Reference genome and annotation
+# 8. Adapter and quality trimming — Trim Galore
 
-The Docker image contains:
+The supplied report states that adapter sequences and low-quality bases were removed using Trim Galore and that reads/bases above **Q30** were retained for downstream analysis.
+
+Run Trim Galore on all 8 paired-end samples with **one command**:
+
+```bash
+for r1 in ~/input/*_1.fastq.gz; do sample=$(basename "$r1" _1.fastq.gz); trim_galore --paired --quality 30 --cores 2 --gzip --output_dir ~/results/trim "$r1" "$HOME/input/${sample}_2.fastq.gz"; done
+```
+
+The paired outputs will look like:
 
 ```text
-reference/
-├── Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
-├── Homo_sapiens.GRCh38.112.gtf.gz
-└── hisat2/
-    └── grch38/
-        ├── genome.1.ht2
-        ├── genome.2.ht2
-        ├── ...
-        └── genome.8.ht2
+SRR1039508_1_val_1.fq.gz
+SRR1039508_2_val_2.fq.gz
 ```
-
-The practical uses:
-
-- **Assembly:** GRCh38.p14
-- **FASTA:** Ensembl release 112 primary assembly
-- **GTF:** Ensembl release 112
-- **HISAT2 index:** official pre-built GRCh38 index
-
-Ensembl release 112 is used because it is a GRCh38.p14 release contemporaneous with the supplied May 2024 analysis report.
-
-Using a pre-built HISAT2 index avoids asking students to build the entire human genome index in an 8 GB Codespace.
 
 ---
 
-## 4. Repository structure
+# 9. Post-trimming FastQC
 
-After Codespaces initializes, the workspace is organized as:
+Run FastQC on all trimmed reads with **one command**:
+
+```bash
+fastqc -t 2 ~/results/trim/*_val_*.fq.gz -o ~/results/fastqc_trimmed
+```
+
+Compare:
 
 ```text
-.
-├── .devcontainer/
-│   └── devcontainer.json
-├── data/
-│   ├── raw/                         # preloaded Airway FASTQs
-│   └── trimmed/                     # Trim Galore output
-├── metadata/
-│   └── airway_samples.tsv
-├── reference/                       # symlink to preloaded reference resources
-├── results/
-│   ├── 01_fastqc_raw/
-│   ├── 02_trim_galore/
-│   ├── 03_fastqc_trimmed/
-│   ├── 04_alignment/
-│   └── 05_featurecounts/
-├── logs/
-├── docker/
-│   └── preload_course_data.sh
-├── scripts/
-│   ├── 00_check_environment.sh
-│   ├── 01_fastqc_raw.sh
-│   ├── 02_trim_galore.sh
-│   ├── 03_fastqc_trimmed.sh
-│   ├── 04_hisat2_align.sh
-│   ├── 05_featurecounts.sh
-│   ├── 06_start_server.sh
-│   ├── init_workspace.sh
-│   ├── make_clean_count_matrix.py
-│   └── run_all.sh
-├── Dockerfile
-├── environment.yml
-└── README.md
+~/results/fastqc/
+~/results/fastqc_trimmed/
 ```
-
-The Codespace automatically runs:
-
-```bash
-bash scripts/init_workspace.sh
-```
-
-It is safe to run it again manually.
 
 ---
 
-## 5. Start the Codespace
+# 10. Align all 8 samples with HISAT2
 
-On GitHub:
+The supplied report states that the processed reads were aligned to the human reference genome using HISAT2 with default alignment parameters.
+
+The only explicit computational setting added here is `-p 2` because the Codespace has 2 CPUs.
+
+Run alignment for all 8 samples with **one command**:
+
+```bash
+for r1 in ~/results/trim/*_1_val_1.fq.gz; do sample=$(basename "$r1" _1_val_1.fq.gz); hisat2 -p 2 -x ~/results/reference/grch38/genome -1 "$r1" -2 "$HOME/results/trim/${sample}_2_val_2.fq.gz" -S "$HOME/results/alignment/${sample}.sam" 2> "$HOME/results/logs/${sample}.hisat2.log"; done
+```
+
+SAM files:
 
 ```text
-Code → Codespaces → Create codespace on main
+~/results/alignment/
 ```
 
-The first build is the longest because the Docker image downloads the human reference resources and HISAT2 index.
-
-When the terminal opens, verify the environment:
-
-```bash
-bash scripts/00_check_environment.sh
-```
-
-You should see:
-
-```bash
-nproc
-# 2
-```
-
-and approximately 8 GB RAM.
-
----
-
-# Student practical
-
-## Step 1 — Raw FASTQ quality control
-
-View the input files:
-
-```bash
-ls -lh data/raw/
-```
-
-Run FastQC:
-
-```bash
-fastqc \
-  -t 2 \
-  -o results/01_fastqc_raw \
-  data/raw/*.fastq.gz
-```
-
-Or use the prepared script:
-
-```bash
-bash scripts/01_fastqc_raw.sh
-```
-
-Inspect the generated `*_fastqc.html` reports.
-
-Focus on:
-
-- per-base sequence quality
-- adapter content
-- sequence duplication
-- overrepresented sequences
-
----
-
-## Step 2 — Trim adapters and low-quality bases
-
-The supplied report describes removal of adapters and low-quality bases using Trim Galore and a Q30 threshold.
-
-Example for one sample:
-
-```bash
-trim_galore \
-  --paired \
-  --quality 30 \
-  --cores 2 \
-  --gzip \
-  --output_dir data/trimmed \
-  data/raw/SRR1039508_1.fastq.gz \
-  data/raw/SRR1039508_2.fastq.gz
-```
-
-Run all four samples:
-
-```bash
-bash scripts/02_trim_galore.sh
-```
-
-Expected files include:
+HISAT2 alignment summaries:
 
 ```text
-data/trimmed/SRR1039508_1_val_1.fq.gz
-data/trimmed/SRR1039508_2_val_2.fq.gz
+~/results/logs/
+```
+
+View all alignment percentages with one command:
+
+```bash
+grep "overall alignment rate" ~/results/logs/*.hisat2.log
 ```
 
 ---
 
-## Step 3 — Post-trimming FastQC
+# 11. Convert SAM to sorted/indexed BAM
 
-Run FastQC again:
-
-```bash
-fastqc \
-  -t 2 \
-  -o results/03_fastqc_trimmed \
-  data/trimmed/*_val_*.fq.gz
-```
-
-Or:
+Run SAMtools on all 8 SAM files with **one command**:
 
 ```bash
-bash scripts/03_fastqc_trimmed.sh
+for sam in ~/results/alignment/*.sam; do sample=$(basename "$sam" .sam); samtools sort -@ 2 -m 512M -o "$HOME/results/bam/${sample}.sorted.bam" "$sam" && samtools index -@ 2 "$HOME/results/bam/${sample}.sorted.bam"; done
 ```
 
-Compare the raw and trimmed FastQC reports.
-
----
-
-## Step 4 — Align reads with HISAT2
-
-The source report specifies HISAT2 with default alignment parameters.
-
-For this Codespace, only the thread setting is explicitly added:
+Create flagstat reports for all BAM files with **one command**:
 
 ```bash
-hisat2 \
-  -p 2 \
-  -x reference/hisat2/grch38/genome \
-  -1 data/trimmed/SRR1039508_1_val_1.fq.gz \
-  -2 data/trimmed/SRR1039508_2_val_2.fq.gz \
-  2> logs/SRR1039508.hisat2.log \
-| samtools sort \
-    -@ 1 \
-    -m 256M \
-    -o results/04_alignment/SRR1039508.GRCh38.sorted.bam -
+for bam in ~/results/bam/*.sorted.bam; do sample=$(basename "$bam" .sorted.bam); samtools flagstat -@ 2 "$bam" > "$HOME/results/bam/${sample}.flagstat.txt"; done
 ```
 
-Index the BAM:
-
-```bash
-samtools index -@ 2 \
-  results/04_alignment/SRR1039508.GRCh38.sorted.bam
-```
-
-Create alignment statistics:
-
-```bash
-samtools flagstat -@ 2 \
-  results/04_alignment/SRR1039508.GRCh38.sorted.bam \
-  > results/04_alignment/SRR1039508.flagstat.txt
-```
-
-Run all samples:
-
-```bash
-bash scripts/04_hisat2_align.sh
-```
-
-HISAT2 alignment summaries are written to:
+Outputs:
 
 ```text
-logs/*.hisat2.log
+~/results/bam/*.sorted.bam
+~/results/bam/*.sorted.bam.bai
+~/results/bam/*.flagstat.txt
 ```
 
 ---
 
-## Step 5 — Gene quantification with featureCounts
+# 12. Gene quantification — featureCounts
 
-Run featureCounts across all aligned BAM files:
+The supplied report uses featureCounts to calculate gene abundance from genome-aligned reads.
 
-```bash
-featureCounts \
-  -T 2 \
-  -p \
-  --countReadPairs \
-  -s 0 \
-  -t exon \
-  -g gene_id \
-  -a reference/Homo_sapiens.GRCh38.112.gtf.gz \
-  -o results/05_featurecounts/airway_gene_counts.txt \
-  results/04_alignment/*.GRCh38.sorted.bam
-```
-
-Or:
+Run featureCounts on all 8 BAM files with **one command**:
 
 ```bash
-bash scripts/05_featurecounts.sh
+featureCounts -T 2 -p --countReadPairs -s 0 -t exon -g gene_id -a ~/results/reference/Homo_sapiens.GRCh38.112.gtf.gz -o ~/results/featurecounts/airway_gene_counts.txt ~/results/bam/*.sorted.bam
 ```
 
 Main outputs:
 
 ```text
-results/05_featurecounts/airway_gene_counts.txt
-results/05_featurecounts/airway_gene_counts.txt.summary
-results/05_featurecounts/airway_gene_counts_matrix.tsv
+~/results/featurecounts/airway_gene_counts.txt
+~/results/featurecounts/airway_gene_counts.txt.summary
 ```
 
-The simplified matrix:
+Create a compact count matrix with **one command**:
 
-```text
-airway_gene_counts_matrix.tsv
+```bash
+grep -v '^#' ~/results/featurecounts/airway_gene_counts.txt | cut -f1,7- > ~/results/featurecounts/airway_gene_counts_matrix.tsv
 ```
 
-contains:
-
-```text
-Geneid    SRR1039508    SRR1039509    SRR1039512    SRR1039513
-```
-
-and can be used directly in a later DESeq2 practical.
+The matrix contains one gene column followed by counts for all 8 samples and can be used for the next DESeq2 practical.
 
 ---
 
-## 6. Run the entire workflow
+# 13. Download output files from Codespaces
 
-Instead of executing each stage manually:
+Start a Python file server with **one command**:
 
 ```bash
-bash scripts/run_all.sh
+python -m http.server 8000 --directory ~/results
 ```
 
-The pipeline executes:
+In Codespaces:
 
 ```text
-environment check
-      ↓
-raw FastQC
-      ↓
-Trim Galore
-      ↓
-post-trim FastQC
-      ↓
-HISAT2
-      ↓
-samtools sort/index/flagstat
-      ↓
-featureCounts
-      ↓
-clean gene count matrix
+PORTS → 8000 → Open in Browser
 ```
 
----
-
-## 7. Download output files from Codespaces
-
-Start the Python HTTP server:
-
-```bash
-bash scripts/06_start_server.sh
-```
-
-Equivalent command:
-
-```bash
-python -m http.server 8000 --directory results
-```
-
-In GitHub Codespaces:
-
-```text
-PORTS → port 8000 → Open in Browser
-```
-
-Students can then download their FastQC reports, alignment statistics and featureCounts output directly from the browser.
+Students can download FastQC reports, trimming outputs, HISAT2 logs, BAM files, featureCounts outputs and the metadata file.
 
 Stop the server with:
 
@@ -439,79 +356,75 @@ Ctrl+C
 
 ---
 
-## 8. Useful inspection commands
+# Complete student command sequence
 
-Check FASTQ statistics:
+The practical intentionally keeps each analysis stage visible to the student.
+
+### 1. Create folders
 
 ```bash
-seqkit stats data/raw/*.fastq.gz
+mkdir -p ~/input ~/results/{fastqc,trim,fastqc_trimmed,reference,alignment,bam,featurecounts,logs}
 ```
 
-Inspect alignment statistics:
+### 2. Download 8 paired-end Airway subsets
 
 ```bash
-for f in results/04_alignment/*.flagstat.txt; do
-  echo "===== $f ====="
-  cat "$f"
-done
+(cd ~/input && for run in SRR1039508 SRR1039509 SRR1039512 SRR1039513 SRR1039516 SRR1039517 SRR1039520 SRR1039521; do fastq-dump --split-files --gzip --skip-technical -N 1 -X 200000 "$run"; done)
 ```
 
-Preview the count matrix:
+### 3. Download reference + GTF + HISAT2 index
 
 ```bash
-column -t -s $'\t' \
-  results/05_featurecounts/airway_gene_counts_matrix.tsv \
-  | head -20
+curl -L https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz -o ~/results/reference/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz && curl -L https://ftp.ensembl.org/pub/release-112/gtf/homo_sapiens/Homo_sapiens.GRCh38.112.gtf.gz -o ~/results/reference/Homo_sapiens.GRCh38.112.gtf.gz && curl -L https://genome-idx.s3.amazonaws.com/hisat/grch38_genome.tar.gz -o ~/results/reference/grch38_genome.tar.gz && tar -xzf ~/results/reference/grch38_genome.tar.gz -C ~/results/reference && rm ~/results/reference/grch38_genome.tar.gz
+```
+
+### 4. Raw FastQC
+
+```bash
+fastqc -t 2 ~/input/*.fastq.gz -o ~/results/fastqc
+```
+
+### 5. Trim Galore
+
+```bash
+for r1 in ~/input/*_1.fastq.gz; do sample=$(basename "$r1" _1.fastq.gz); trim_galore --paired --quality 30 --cores 2 --gzip --output_dir ~/results/trim "$r1" "$HOME/input/${sample}_2.fastq.gz"; done
+```
+
+### 6. Post-trim FastQC
+
+```bash
+fastqc -t 2 ~/results/trim/*_val_*.fq.gz -o ~/results/fastqc_trimmed
+```
+
+### 7. HISAT2
+
+```bash
+for r1 in ~/results/trim/*_1_val_1.fq.gz; do sample=$(basename "$r1" _1_val_1.fq.gz); hisat2 -p 2 -x ~/results/reference/grch38/genome -1 "$r1" -2 "$HOME/results/trim/${sample}_2_val_2.fq.gz" -S "$HOME/results/alignment/${sample}.sam" 2> "$HOME/results/logs/${sample}.hisat2.log"; done
+```
+
+### 8. SAM → sorted/indexed BAM
+
+```bash
+for sam in ~/results/alignment/*.sam; do sample=$(basename "$sam" .sam); samtools sort -@ 2 -m 512M -o "$HOME/results/bam/${sample}.sorted.bam" "$sam" && samtools index -@ 2 "$HOME/results/bam/${sample}.sorted.bam"; done
+```
+
+### 9. featureCounts
+
+```bash
+featureCounts -T 2 -p --countReadPairs -s 0 -t exon -g gene_id -a ~/results/reference/Homo_sapiens.GRCh38.112.gtf.gz -o ~/results/featurecounts/airway_gene_counts.txt ~/results/bam/*.sorted.bam
+```
+
+### 10. Serve results
+
+```bash
+python -m http.server 8000 --directory ~/results
 ```
 
 ---
 
-## 9. Minimal command sheet
+## Notes
 
-Students can copy these commands one at a time:
-
-```bash
-bash scripts/00_check_environment.sh
-bash scripts/01_fastqc_raw.sh
-bash scripts/02_trim_galore.sh
-bash scripts/03_fastqc_trimmed.sh
-bash scripts/04_hisat2_align.sh
-bash scripts/05_featurecounts.sh
-bash scripts/06_start_server.sh
-```
-
-Or run everything except the download server:
-
-```bash
-bash scripts/run_all.sh
-```
-
----
-
-## 10. Data sources
-
-Airway biological experiment:
-
-```text
-GEO GSE52778
-SRA SRP033351
-```
-
-Teaching FASTQ subsets:
-
-```text
-https://github.com/csoneson/rnaseqworkflow_exampledata
-```
-
-Reference:
-
-```text
-Ensembl Homo sapiens GRCh38.p14
-Ensembl release 112
-```
-
-HISAT2 index:
-
-```text
-https://daehwankimlab.github.io/hisat2/download/
-```
+- The full Airway experiment is much larger. The `-X 200000` setting intentionally subsets each run for a classroom demonstration on a 2-core Codespace.
+- The 8 biological samples are still preserved as four untreated and four dexamethasone-treated samples.
+- The supplied report identifies FastQC v0.11.8, but the Docker image installs the current compatible Bioconda FastQC package to keep the container build reliable.
+- The report does not provide the literal featureCounts flags. The paired-end settings shown here are explicit practical implementation choices for the Airway data.
