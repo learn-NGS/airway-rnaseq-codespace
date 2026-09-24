@@ -1,0 +1,17 @@
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - fastqc
+  - trim-galore
+  - hisat2
+  - samtools
+  - subread
+  - sra-tools
+  - seqkit
+  - pigz
+  - curl
+  - wget
+  - tree
+  - procps-ng
