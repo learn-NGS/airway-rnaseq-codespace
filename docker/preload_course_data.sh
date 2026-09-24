@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT="${1:-/opt/airway-rnaseq}"
-SPOTS="${2:-200000}"
 RAW="$ROOT/data/raw"
 REF="$ROOT/reference"
 INDEX="$REF/hisat2"
@@ -25,6 +24,7 @@ TSV
 FASTA_URL="https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
 GTF_URL="https://ftp.ensembl.org/pub/release-112/gtf/homo_sapiens/Homo_sapiens.GRCh38.112.gtf.gz"
 HISAT2_INDEX_URL="https://genome-idx.s3.amazonaws.com/hisat/grch38_genome.tar.gz"
+AIRWAY_FASTQ_BASE="https://raw.githubusercontent.com/csoneson/rnaseqworkflow_exampledata/master/FASTQ"
 
 retry_curl() {
   local url="$1"
@@ -51,29 +51,31 @@ fi
 
 RUNS=(SRR1039508 SRR1039509 SRR1039512 SRR1039513)
 for run in "${RUNS[@]}"; do
-  if [[ -s "$RAW/${run}_1.fastq.gz" && -s "$RAW/${run}_2.fastq.gz" ]]; then
-    continue
-  fi
-  echo "[preload] Downloading first ${SPOTS} spots from $run ..."
-  fastq-dump \
-    --outdir "$RAW" \
-    --gzip \
-    --skip-technical \
-    --split-files \
-    -N 1 -X "$SPOTS" \
-    "$run"
+  for mate in 1 2; do
+    src_mate="R${mate}"
+    out="$RAW/${run}_${mate}.fastq.gz"
+    if [[ -s "$out" ]]; then
+      continue
+    fi
+    echo "[preload] Downloading Airway teaching FASTQ: ${run}_${src_mate}"
+    retry_curl       "$AIRWAY_FASTQ_BASE/${run}_${src_mate}.fastq.gz"       "$out"
+  done
 done
 
-rm -rf /root/ncbi /tmp/sra* 2>/dev/null || true
-
-cat > "$ROOT/RESOURCE_MANIFEST.txt" <<EOF2
+cat > "$ROOT/RESOURCE_MANIFEST.txt" <<'EOF2'
 Teaching resources preloaded in Docker image
-Assembly: Homo sapiens GRCh38.p14
-FASTA: Ensembl release 112 primary assembly
-GTF: Ensembl release 112
-HISAT2 index: pre-built GRCh38 genome index
-Airway FASTQ subset: SRR1039508, SRR1039509, SRR1039512, SRR1039513
-Spots per run: ${SPOTS}
+Reference assembly: Homo sapiens GRCh38.p14
+Reference FASTA: Ensembl release 112 primary assembly
+Annotation GTF: Ensembl release 112
+HISAT2 index: official pre-built GRCh38 genome index
+Airway teaching FASTQs:
+  SRR1039508
+  SRR1039509
+  SRR1039512
+  SRR1039513
+FASTQ source:
+  csoneson/rnaseqworkflow_exampledata
+  Files are small paired-end teaching subsets from GSE52778 / SRP033351.
 EOF2
 
 chmod -R a+rX "$ROOT"
