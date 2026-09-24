@@ -1,22 +1,33 @@
-FROM condaforge/miniforge3:latest
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
-ENV COURSE_ROOT=/opt/airway-rnaseq \
-    THREADS=2 \
-    PYTHONUNBUFFERED=1
+USER root
 
-COPY environment.yml /tmp/environment.yml
-RUN mamba env update -n base -f /tmp/environment.yml && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates bzip2 && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -L \
+    https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+    -o /tmp/miniforge.sh && \
+    bash /tmp/miniforge.sh -b -p /opt/conda && \
+    rm -f /tmp/miniforge.sh
+
+ENV PATH="/opt/conda/bin:${PATH}"
+
+RUN mamba install -y -n base \
+    -c conda-forge \
+    -c bioconda \
+    python=3.12 \
+    fastqc \
+    trim-galore \
+    hisat2 \
+    samtools \
+    subread \
+    sra-tools \
+    seqkit \
+    pigz \
+    wget && \
     mamba clean --all --yes && \
-    rm -f /tmp/environment.yml
+    chmod -R a+rX /opt/conda
 
-COPY docker/preload_course_data.sh /usr/local/bin/preload_course_data.sh
-RUN chmod +x /usr/local/bin/preload_course_data.sh && \
-    /usr/local/bin/preload_course_data.sh "${COURSE_ROOT}"
-
-RUN useradd -m -s /bin/bash vscode && \
-    mkdir -p /workspace && \
-    chown -R vscode:vscode /workspace
-
-WORKDIR /workspace
 USER vscode
-CMD ["bash"]
